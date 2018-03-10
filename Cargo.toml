@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["Richard McCormack <brick@brick.codes>"]
 
 [profile.release]
-panic = "abort"
 lto = true
 
 [dependencies]

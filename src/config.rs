@@ -1,4 +1,5 @@
 use std::{self, env};
+use std::collections::HashMap;
 use std::convert::From;
 use std::path::PathBuf;
 use std::ffi::{self, CString};
@@ -37,7 +38,7 @@ impl std::fmt::Display for Error {
             Error::IoError(ref e) => write!(f, "Encountered I/O error while attempting to load .trashrc: {}", e),
             Error::IntoStringError(ref e) => write!(f, "Failed to parse pw_dir as String: {}", e),
             Error::ParseError(ref e) => write!(f, "Error while parsing .trashrc: {}", e),
-            Error::NulError(ref e) => write!(f, "Interior null byte found when parsing exports, don't pull null bytes there: {}", e)
+            Error::NulError(ref e) => write!(f, "Interior null byte found when parsing aliases or exports, don't pull null bytes there: {}", e)
         }
     }
 }
@@ -45,13 +46,15 @@ impl std::fmt::Display for Error {
 enum ParserState {
     LookingForSection,
     PathSection,
-    ExportsSection
+    ExportsSection,
+    AliasesSection,
 }
 
 /// Loads the .trashrc in the user's home directory
-pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
+pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, String>)), Error> {
     let mut exports: Vec<CString> = Vec::with_capacity(16);
     let mut path: Vec<PathBuf> = Vec::with_capacity(16);
+    let mut aliases: HashMap<CString, String> = HashMap::with_capacity(16);
 
     // Now, read the RC file if it exists
     // Find the user's home directory
@@ -79,6 +82,7 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
         let mut parser_state = ParserState::LookingForSection;
         let mut visited_path = false;
         let mut visited_exports = false;
+        let mut visited_aliases = false;
         let mut expected_open = false;
 
         // @Helpfulness add line to error
@@ -95,8 +99,9 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
                     } else {
                         let issue = match parser_state {
                             ParserState::LookingForSection => unreachable!(),
-                            ParserState::PathSection => "PATH identifier was not immediately proceeded by an opening section token `{`",
-                            ParserState::ExportsSection => "EXPORTS identifier was not immediately proceeded by an opening section token `{`"
+                            ParserState::PathSection => "PATH section identifier was not immediately proceeded by an opening section token `{`",
+                            ParserState::ExportsSection => "EXPORTS section identifier was not immediately proceeded by an opening section token `{`",
+                            ParserState::AliasesSection => "ALIASES section identifier was not immediately proceeded by an opening section token `{`",
                         };
                         return Err(Error::ParseError(issue.into()));
                     }
@@ -108,8 +113,9 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
                         }
                         match parser_state {
                             ParserState::LookingForSection => (),
-                            ParserState::PathSection => return Err(Error::ParseError("Encountered PATH identifier while still processing PATHS".into())),
-                            ParserState::ExportsSection => return Err(Error::ParseError("Encountered PATH identifier while still processing EXPORTS".into())),
+                            ParserState::PathSection => return Err(Error::ParseError("Encountered PATH section identifier while still processing PATH".into())),
+                            ParserState::ExportsSection => return Err(Error::ParseError("Encountered PATH section identifier while still processing EXPORTS".into())),
+                            ParserState::AliasesSection => return Err(Error::ParseError("Encountered ALIASES section identifier while still processing ALIASES".into())),
                         }
                         expected_open = true;
                         parser_state = ParserState::PathSection;
@@ -120,11 +126,19 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
                         }
                         match parser_state {
                             ParserState::LookingForSection => (),
-                            ParserState::PathSection => return Err(Error::ParseError("Encountered EXPORTS identifier while still processing PATHS".into())),
+                            ParserState::PathSection => return Err(Error::ParseError("Encountered EXPORTS identifier while still processing PATH".into())),
                             ParserState::ExportsSection => return Err(Error::ParseError("Encountered EXPORTS identifier while still processing EXPORTS".into())),
+                            ParserState::AliasesSection => return Err(Error::ParseError("Encountered ALIASES identifier while still processing ALIASES".into())),
                         }
                         expected_open = true;
                         parser_state = ParserState::ExportsSection;
+                    },
+                    "ALIASES" => {
+                        if visited_aliases {
+                            return Err(Error::ParseError("Encountered ALIASES identifier but ALIASES already set.".into()));
+                        }
+                        expected_open = true;
+                        parser_state = ParserState::AliasesSection;
                     },
                     "}" => {
                         match parser_state {
@@ -134,7 +148,10 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
                             },
                             ParserState::PathSection => {
                                 visited_path = true
-                            }
+                            },
+                            ParserState::AliasesSection =>{
+                                visited_aliases = true
+                            },
                         }
                         parser_state = ParserState::LookingForSection;
                     },
@@ -152,7 +169,24 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
                             ParserState::ExportsSection => {
                                 let bytes: Vec<u8> = token.bytes().collect();
                                 exports.push(CString::new(bytes)?);
-                            }
+                            },
+                            ParserState::AliasesSection => {
+                                let alias: Vec<&str> = line.trim().splitn(2, |x| x == '=').collect();
+                                if alias.len() != 2 {
+                                    return Err(Error::ParseError(format!("Failed to create alias from `{}`", line.trim())));
+                                }
+                                let mut replacement = String::from(alias[1]);
+                                unsafe {
+                                    for byte in replacement.as_bytes_mut() {
+                                        if *byte == b' ' {
+                                            *byte = 0;
+                                        }
+                                    }
+                                }
+                                replacement.push('\0');
+                                aliases.insert(CString::new(alias[0])?, replacement);
+                                break
+                            },
                         }
                     }
                 }
@@ -162,7 +196,8 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
         match parser_state {
             ParserState::LookingForSection => (),
             ParserState::PathSection => return Err(Error::ParseError("Still parsing PATH section when end of .trashrc was reached".into())),
-            ParserState::ExportsSection => return Err(Error::ParseError("Still parsing EXPORTS section when end of .trashrc was reached".into()))
+            ParserState::ExportsSection => return Err(Error::ParseError("Still parsing EXPORTS section when end of .trashrc was reached".into())),
+            ParserState::AliasesSection => return Err(Error::ParseError("Still parsing ALIASES section when end of .trashrc was reached".into()))
         }
     }
 
@@ -173,5 +208,5 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>)), Error> {
         }
     }
 
-    Ok((path, exports))
+    Ok((path, exports, aliases))
 }

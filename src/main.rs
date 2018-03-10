@@ -23,8 +23,8 @@ fn main() {
         libc::sigprocmask(libc::SIG_SETMASK, &signals, std::ptr::null_mut());
     } */
 
-    let (path_list, owned_exports) = match config::load_settings() {
-        Ok((path, owned_exports)) => (path, owned_exports),
+    let (path_list, owned_exports, aliases) = match config::load_settings() {
+        Ok((path, owned_exports, aliases)) => (path, owned_exports, aliases),
         Err(e) => {
             eprintln!("{}", e);
             return;
@@ -69,7 +69,17 @@ fn main() {
             let mut no_access = false;
             let mut success = false;
 
-            let binary_name = unsafe { CStr::from_ptr(argv[0] as *const i8) };
+            let mut binary_name = unsafe { CStr::from_ptr(argv[0] as *const i8) };
+
+            if let Some(replacement) = aliases.get(binary_name) {
+                argv[0] = replacement.as_ptr();
+                for token in replacement.split("\0").skip(1).filter(|x| !x.is_empty()) {
+                    argv.insert(1, token.as_ptr())
+                }
+                binary_name = unsafe { CStr::from_ptr(replacement.as_ptr() as *const i8) };
+                println!("{:?}", replacement);
+                println!("{:?}", argv);
+            }
 
             for path in path_list.iter() {
                 let mut temp_path = path.clone();
