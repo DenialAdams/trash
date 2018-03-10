@@ -1,0 +1,12 @@
+[package]
+name = "trash"
+version = "0.1.0"
+authors = ["Richard McCormack <brick@brick.codes>"]
+
+[profile.release]
+panic = "abort"
+lto = true
+
+[dependencies]
+libc = "0.2"
+termcolor = "0.3"
