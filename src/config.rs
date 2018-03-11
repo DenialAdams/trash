@@ -59,26 +59,10 @@ enum ParserState {
 }
 
 /// Loads the .trashrc in the user's home directory
-pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, String>)), Error> {
+pub fn load_settings(home_dir: &str) -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, String>)), Error> {
     let mut exports: Vec<CString> = Vec::with_capacity(16);
     let mut path: Vec<PathBuf> = Vec::with_capacity(16);
     let mut aliases: HashMap<CString, String> = HashMap::with_capacity(16);
-
-    // Now, read the RC file if it exists
-    // Find the user's home directory
-    let home_dir = if let Ok(value) = env::var("HOME") {
-        value
-    } else {
-        // I'm not sure under what circumstances HOME would be unset, so this may be wholly unnecessary
-        // @Robustness getpwuid is not re-entrant, it's fine for us but just for kicks maybe we shoudld use getpwuid_r
-        let home_dir = unsafe {
-            let user_id = libc::getuid();
-            let pwid_ptr = libc::getpwuid(user_id);
-            CStr::from_ptr((*pwid_ptr).pw_dir).to_str()?.to_string()
-        };
-        env::set_var("HOME", &home_dir);
-        home_dir
-    };
 
     let mut trash_rc_path = PathBuf::from(home_dir);
     trash_rc_path.push(".trashrc");

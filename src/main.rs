@@ -7,6 +7,7 @@ mod prompt;
 
 use std::io::{self, Write};
 use std::ffi::{CString, CStr};
+use std::env;
 
 fn main() {
     let stdout = io::stdout();
@@ -15,7 +16,6 @@ fn main() {
     let mut argv = Vec::with_capacity(16);
     let mut prompt = String::with_capacity(64);
     let errno = unsafe { libc::__errno_location() };
-    //let mut errno = unsafe { libc::__errno_location() };
 
     // Mask out some signals
     /* unsafe {
@@ -25,7 +25,22 @@ fn main() {
         libc::sigprocmask(libc::SIG_SETMASK, &signals, std::ptr::null_mut());
     } */
 
-    let (path_list, owned_exports, aliases) = match config::load_settings() {
+    // Find the user's home directory
+    let home_dir = if let Ok(value) = env::var("HOME") {
+        value
+    } else {
+        // I'm not sure under what circumstances HOME would be unset, so this may be wholly unnecessary
+        // @Robustness getpwuid is not re-entrant, it's fine for us but just for kicks maybe we shoudld use getpwuid_r
+        let home_dir = unsafe {
+            let user_id = libc::getuid();
+            let pwid_ptr = libc::getpwuid(user_id);
+            CStr::from_ptr((*pwid_ptr).pw_dir).to_str().unwrap().to_string()
+        };
+        env::set_var("HOME", &home_dir);
+        home_dir
+    };
+
+    let (path_list, owned_exports, aliases) = match config::load_settings(&home_dir) {
         Ok((path, owned_exports, aliases)) => (path, owned_exports, aliases),
         Err(e) => {
             eprintln!("{}", e);
@@ -37,7 +52,7 @@ fn main() {
     exports.push(std::ptr::null());
 
     loop {
-        prompt::generate_prompt(&mut prompt);
+        prompt::generate_prompt(&mut prompt, &home_dir);
         
         // IO: print out, get input in
         let result: Result<(), io::Error> = do catch {
