@@ -133,8 +133,10 @@ fn main() {
 
             if !success && no_access {
                 eprintln!("Found matching executable for {:?} on path, but didn't have rights to execute it.", binary_name);
+                exit_status = 126;
             } else if !success {
                 eprintln!("Command not found {:?}.", binary_name);
+                exit_status = 127;
             }
         }
 

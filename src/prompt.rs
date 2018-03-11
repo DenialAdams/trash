@@ -1,6 +1,7 @@
 use libc;
 use std::ffi::{CStr, CString};
 use std::fmt::Write;
+use std;
 
 pub fn generate_prompt(buf: &mut String, home_dir: &str, status: i32) {
     buf.clear();
@@ -23,12 +24,17 @@ pub fn generate_prompt(buf: &mut String, home_dir: &str, status: i32) {
     let hostname = unsafe { CStr::from_ptr(hostname_container.as_ptr()).to_str().unwrap() };
 
     // Current Directory
-    let mut dir_container: Box<[i8; 64]> = Box::new([0; 64]);
-    let mut current_directory = unsafe { CString::from_raw(libc::getcwd(dir_container.as_mut_ptr(), 64)).into_string().unwrap() };
+    let mut current_directory = unsafe {
+        let mut dir_container: Box<[i8; 64]> = Box::new([0; 64]);
+        libc::getcwd(dir_container.as_mut_ptr(), 64);
+        let dir = CStr::from_ptr(dir_container.as_ptr());
+        dir.to_str().unwrap().to_string()
+    };
     if current_directory.starts_with(home_dir) {
         current_directory = current_directory.replacen(home_dir, "~", 1);
     }
 
     // Source control
+    
     write!(buf, "{}@{} {} % ", username, hostname, current_directory);
 }
