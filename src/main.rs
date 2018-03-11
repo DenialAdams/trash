@@ -3,6 +3,7 @@
 extern crate libc;
 
 mod config;
+mod prompt;
 
 use std::io::{self, Write};
 use std::ffi::{CString, CStr};

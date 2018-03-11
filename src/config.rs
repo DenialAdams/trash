@@ -10,7 +10,7 @@ use libc;
 pub enum Error {
     IoError(io::Error),
     IntoStringError(ffi::IntoStringError),
-    ParseError(String),
+    ParseError((String, usize)),
     NulError(ffi::NulError)
 }
 
@@ -35,10 +35,10 @@ impl From<ffi::NulError> for Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         match *self {
-            Error::IoError(ref e) => write!(f, "Encountered I/O error while attempting to load .trashrc: {}", e),
-            Error::IntoStringError(ref e) => write!(f, "Failed to parse pw_dir as String: {}", e),
-            Error::ParseError(ref e) => write!(f, "Error while parsing .trashrc: {}", e),
-            Error::NulError(ref e) => write!(f, "Interior null byte found when parsing aliases or exports, don't pull null bytes there: {}", e)
+            Error::IoError(ref e) => write!(f, "Encountered I/O error while attempting to load .trashrc: {}.", e),
+            Error::IntoStringError(ref e) => write!(f, "Failed to parse pw_dir as String: {}.", e),
+            Error::ParseError(ref e) => write!(f, "Error while parsing .trashrc: Line {} - {}.", e.1, e.0),
+            Error::NulError(ref e) => write!(f, "Interior null byte found when parsing aliases or exports, don't pull null bytes there: {}.", e)
         }
     }
 }
@@ -84,9 +84,10 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, 
         let mut visited_exports = false;
         let mut visited_aliases = false;
         let mut expected_open = false;
-
-        // @Helpfulness add line to error
+        
+        let mut line_number = 0;
         for line in f.lines() {
+            line_number += 1;
             let line = line?;
             for token in line.split_whitespace() {
                 if token == "#" {
@@ -103,46 +104,46 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, 
                             ParserState::ExportsSection => "EXPORTS section identifier was not immediately proceeded by an opening section token `{`",
                             ParserState::AliasesSection => "ALIASES section identifier was not immediately proceeded by an opening section token `{`",
                         };
-                        return Err(Error::ParseError(issue.into()));
+                        return Err(Error::ParseError((issue.into(), line_number)));
                     }
                 }
                 match token {
                     "PATH" => {
                         if visited_path {
-                            return Err(Error::ParseError("Encountered PATH identifier but PATH already set".into()));
+                            return Err(Error::ParseError(("Encountered PATH identifier but PATH already set".into(), line_number)));
                         }
                         match parser_state {
                             ParserState::LookingForSection => (),
-                            ParserState::PathSection => return Err(Error::ParseError("Encountered PATH section identifier while still processing PATH".into())),
-                            ParserState::ExportsSection => return Err(Error::ParseError("Encountered PATH section identifier while still processing EXPORTS".into())),
-                            ParserState::AliasesSection => return Err(Error::ParseError("Encountered ALIASES section identifier while still processing ALIASES".into())),
+                            ParserState::PathSection => return Err(Error::ParseError(("Encountered PATH section identifier while still processing PATH".into(), line_number))),
+                            ParserState::ExportsSection => return Err(Error::ParseError(("Encountered PATH section identifier while still processing EXPORTS".into(), line_number))),
+                            ParserState::AliasesSection => return Err(Error::ParseError(("Encountered ALIASES section identifier while still processing ALIASES".into(), line_number))),
                         }
                         expected_open = true;
                         parser_state = ParserState::PathSection;
                     },
                     "EXPORTS" => {
                         if visited_exports {
-                            return Err(Error::ParseError("Encountered EXPORTS identifier but EXPORTS already set".into()));
+                            return Err(Error::ParseError(("Encountered EXPORTS identifier but EXPORTS already set".into(), line_number)));
                         }
                         match parser_state {
                             ParserState::LookingForSection => (),
-                            ParserState::PathSection => return Err(Error::ParseError("Encountered EXPORTS identifier while still processing PATH".into())),
-                            ParserState::ExportsSection => return Err(Error::ParseError("Encountered EXPORTS identifier while still processing EXPORTS".into())),
-                            ParserState::AliasesSection => return Err(Error::ParseError("Encountered ALIASES identifier while still processing ALIASES".into())),
+                            ParserState::PathSection => return Err(Error::ParseError(("Encountered EXPORTS identifier while still processing PATH".into(), line_number))),
+                            ParserState::ExportsSection => return Err(Error::ParseError(("Encountered EXPORTS identifier while still processing EXPORTS".into(), line_number))),
+                            ParserState::AliasesSection => return Err(Error::ParseError(("Encountered ALIASES identifier while still processing ALIASES".into(), line_number))),
                         }
                         expected_open = true;
                         parser_state = ParserState::ExportsSection;
                     },
                     "ALIASES" => {
                         if visited_aliases {
-                            return Err(Error::ParseError("Encountered ALIASES identifier but ALIASES already set.".into()));
+                            return Err(Error::ParseError(("Encountered ALIASES identifier but ALIASES already set.".into(), line_number)));
                         }
                         expected_open = true;
                         parser_state = ParserState::AliasesSection;
                     },
                     "}" => {
                         match parser_state {
-                            ParserState::LookingForSection => return Err(Error::ParseError("Encountered closing section token `}` but no section was open".into())),
+                            ParserState::LookingForSection => return Err(Error::ParseError(("Encountered closing section token `}` but no section was open".into(), line_number))),
                             ParserState::ExportsSection => {
                                 visited_exports = true
                             },
@@ -156,12 +157,12 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, 
                         parser_state = ParserState::LookingForSection;
                     },
                     "{" => {
-                        return Err(Error::ParseError("Received opening section token `{` but without a preceding identifier".into()));
+                        return Err(Error::ParseError(("Received opening section token `{` but without a preceding identifier".into(), line_number)));
                     },
                     _ => {
                         match parser_state {
                             ParserState::LookingForSection => {
-                                return Err(Error::ParseError(format!("Encountered unexpected token `{}`; expected section identifier", token)));
+                                return Err(Error::ParseError((format!("Encountered unexpected token `{}`; expected section identifier", token), line_number)));
                             },
                             ParserState::PathSection => {
                                 path.push(PathBuf::from(token))
@@ -173,7 +174,7 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, 
                             ParserState::AliasesSection => {
                                 let alias: Vec<&str> = line.trim().splitn(2, |x| x == '=').collect();
                                 if alias.len() != 2 {
-                                    return Err(Error::ParseError(format!("Failed to create alias from `{}`", line.trim())));
+                                    return Err(Error::ParseError((format!("Failed to create alias from `{}`", line.trim()), line_number)));
                                 }
                                 let mut replacement = String::from(alias[1]);
                                 unsafe {
@@ -195,9 +196,9 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, 
 
         match parser_state {
             ParserState::LookingForSection => (),
-            ParserState::PathSection => return Err(Error::ParseError("Still parsing PATH section when end of .trashrc was reached".into())),
-            ParserState::ExportsSection => return Err(Error::ParseError("Still parsing EXPORTS section when end of .trashrc was reached".into())),
-            ParserState::AliasesSection => return Err(Error::ParseError("Still parsing ALIASES section when end of .trashrc was reached".into()))
+            ParserState::PathSection => return Err(Error::ParseError(("Still parsing PATH section when end of .trashrc was reached".into(), line_number))),
+            ParserState::ExportsSection => return Err(Error::ParseError(("Still parsing EXPORTS section when end of .trashrc was reached".into(), line_number))),
+            ParserState::AliasesSection => return Err(Error::ParseError(("Still parsing ALIASES section when end of .trashrc was reached".into(), line_number)))
         }
     }
 
