@@ -16,6 +16,7 @@ fn main() {
     let mut argv = Vec::with_capacity(16);
     let mut prompt = String::with_capacity(64);
     let errno = unsafe { libc::__errno_location() };
+    let mut exit_status = 0;
 
     // Mask out some signals
     /* unsafe {
@@ -52,7 +53,7 @@ fn main() {
     exports.push(std::ptr::null());
 
     loop {
-        prompt::generate_prompt(&mut prompt, &home_dir);
+        prompt::generate_prompt(&mut prompt, &home_dir, exit_status);
         
         // IO: print out, get input in
         let result: Result<(), io::Error> = do catch {
@@ -118,10 +119,11 @@ fn main() {
                         }
                     }
                     // Wait for our child to finish
-                    let mut status: i32 = unsafe { std::mem::uninitialized() };
-                    unsafe { libc::wait(&mut status as *mut i32) };
+                    let mut wstatus: i32 = unsafe { std::mem::uninitialized() };
+                    unsafe { libc::wait(&mut wstatus as *mut i32) };
                     if unsafe { *errno == 0 } {
                         success = true;
+                        exit_status = unsafe { libc::WEXITSTATUS(wstatus) };
                         break;
                     } else if unsafe { *errno } == libc::EACCES {
                         no_access = true;
