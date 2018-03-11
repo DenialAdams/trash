@@ -13,6 +13,7 @@ fn main() {
     let mut handle = stdout.lock();
     let mut input_line = String::with_capacity(256);
     let mut argv = Vec::with_capacity(16);
+    let mut prompt = String::with_capacity(64);
     let errno = unsafe { libc::__errno_location() };
     //let mut errno = unsafe { libc::__errno_location() };
 
@@ -36,9 +37,11 @@ fn main() {
     exports.push(std::ptr::null());
 
     loop {
+        prompt::generate_prompt(&mut prompt);
+        
         // IO: print out, get input in
         let result: Result<(), io::Error> = do catch {
-            handle.write(b"brick@cohiba % ")?;
+            handle.write(prompt.as_bytes())?;
             handle.flush()?;
             io::stdin().read_line(&mut input_line)?;
             let _ = input_line.pop(); // Newline
@@ -78,8 +81,6 @@ fn main() {
                     argv.insert(1, token.as_ptr())
                 }
                 binary_name = unsafe { CStr::from_ptr(replacement.as_ptr() as *const i8) };
-                println!("{:?}", replacement);
-                println!("{:?}", argv);
             }
 
             for path in path_list.iter() {

@@ -2,13 +2,14 @@ use std::{self, env};
 use std::collections::HashMap;
 use std::convert::From;
 use std::path::PathBuf;
-use std::ffi::{self, CString};
+use std::ffi::{self, CString, CStr};
 use std::fs::File;
 use std::io::{self, BufReader, BufRead};
 use libc;
 
 pub enum Error {
     IoError(io::Error),
+    Utf8Error(std::str::Utf8Error),
     IntoStringError(ffi::IntoStringError),
     ParseError((String, usize)),
     NulError(ffi::NulError)
@@ -32,13 +33,20 @@ impl From<ffi::NulError> for Error {
     }
 }
 
+impl From<std::str::Utf8Error> for Error {
+    fn from(e: std::str::Utf8Error) -> Error {
+        Error::Utf8Error(e)
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         match *self {
             Error::IoError(ref e) => write!(f, "Encountered I/O error while attempting to load .trashrc: {}.", e),
             Error::IntoStringError(ref e) => write!(f, "Failed to parse pw_dir as String: {}.", e),
             Error::ParseError(ref e) => write!(f, "Error while parsing .trashrc: Line {} - {}.", e.1, e.0),
-            Error::NulError(ref e) => write!(f, "Interior null byte found when parsing aliases or exports, don't pull null bytes there: {}.", e)
+            Error::NulError(ref e) => write!(f, "Interior null byte found when parsing aliases or exports, don't pull null bytes there: {}.", e),
+            Error::Utf8Error(ref e) => write!(f, "System username was invalid utf-8: {}", e),
         }
     }
 }
@@ -66,7 +74,7 @@ pub fn load_settings() -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, 
         let home_dir = unsafe {
             let user_id = libc::getuid();
             let pwid_ptr = libc::getpwuid(user_id);
-            CString::from_raw((*pwid_ptr).pw_dir).into_string()?
+            CStr::from_ptr((*pwid_ptr).pw_dir).to_str()?.to_string()
         };
         env::set_var("HOME", &home_dir);
         home_dir
