@@ -62,6 +62,9 @@ fn main() {
             io::stdin().read_line(&mut input_line)?;
             let _ = input_line.pop(); // Newline
             input_line = input_line.trim().into(); // Spaces
+            if input_line.is_empty() {
+                continue;
+            }
             input_line.push('\0'); // Needed because libc expects null termined arguments
             Ok(())
         };
