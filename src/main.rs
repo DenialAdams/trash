@@ -1,6 +1,7 @@
 #![feature(catch_expr)]
 
 extern crate libc;
+extern crate termcolor;
 
 mod config;
 mod prompt;
@@ -8,13 +9,13 @@ mod prompt;
 use std::io::{self, Write};
 use std::ffi::{CString, CStr};
 use std::env;
+use termcolor::{ColorChoice, StandardStream};
 
 fn main() {
-    let stdout = io::stdout();
+    let stdout = StandardStream::stdout(ColorChoice::Auto);
     let mut handle = stdout.lock();
     let mut input_line = String::with_capacity(256);
     let mut argv = Vec::with_capacity(16);
-    let mut prompt = String::with_capacity(64);
     let errno = unsafe { libc::__errno_location() };
     let mut exit_status = 0;
 
@@ -53,11 +54,10 @@ fn main() {
     exports.push(std::ptr::null());
 
     loop {
-        prompt::generate_prompt(&mut prompt, &home_dir, exit_status);
         
         // IO: print out, get input in
         let result: Result<(), io::Error> = do catch {
-            handle.write(prompt.as_bytes())?;
+            prompt::write_prompt(&mut handle, &home_dir, exit_status)?;
             handle.flush()?;
             io::stdin().read_line(&mut input_line)?;
             let _ = input_line.pop(); // Newline
@@ -67,7 +67,7 @@ fn main() {
         };
 
         if let Err(e) = result {
-            eprintln!("Error performing shell I/O:{:?}", e);
+            eprintln!("Error performing shell I/O: {:?}", e);
             break;
         }
 
@@ -132,7 +132,7 @@ fn main() {
             }
 
             if !success && no_access {
-                eprintln!("Found matching executable for {:?} on path, but didn't have rights to execute it.", binary_name);
+                eprintln!("Found matching item for {:?} on path, but didn't have rights to execute it.", binary_name);
                 exit_status = 126;
             } else if !success {
                 eprintln!("Command not found {:?}.", binary_name);

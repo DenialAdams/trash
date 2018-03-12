@@ -201,5 +201,15 @@ pub fn load_settings(home_dir: &str) -> Result<((Vec<PathBuf>, Vec<CString>, Has
         }
     }
 
+    // export our PATH
+    {
+        let mut path_string = path.iter().fold(String::from("PATH="), |mut string, path| { string.push_str(path.to_str().unwrap()); string.push(':'); string });
+        if path_string.ends_with(":") {
+            let _ = path_string.pop(); // Remove trailing :
+        }
+
+        exports.push(CString::new(path_string)?);
+    }
+
     Ok((path, exports, aliases))
 }
