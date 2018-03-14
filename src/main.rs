@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::ffi::{CString, CStr};
 use std::env;
 use termcolor::{ColorChoice, StandardStream};
+use std::path::Path;
 
 fn main() {
     let stdout = StandardStream::stdout(ColorChoice::Auto);
@@ -46,7 +47,7 @@ fn main() {
         Ok((path, owned_exports, aliases)) => (path, owned_exports, aliases),
         Err(e) => {
             eprintln!("{}", e);
-            return;
+            std::process::exit(-1);
         }
     };
 
@@ -54,6 +55,8 @@ fn main() {
     exports.push(std::ptr::null());
 
     loop {
+        input_line.clear();
+        argv.clear();
         
         // IO: print out, get input in
         let result: Result<(), io::Error> = do catch {
@@ -62,10 +65,6 @@ fn main() {
             io::stdin().read_line(&mut input_line)?;
             let _ = input_line.pop(); // Newline
             input_line = input_line.trim().into(); // Spaces
-            if input_line.is_empty() {
-                continue;
-            }
-            input_line.push('\0'); // Needed because libc expects null termined arguments
             Ok(())
         };
 
@@ -73,6 +72,48 @@ fn main() {
             eprintln!("Error performing shell I/O: {:?}", e);
             break;
         }
+
+        if input_line.is_empty() {
+            continue;
+        }
+
+        let do_aliases = if input_line.starts_with("\\") {
+            input_line.remove(0);
+            false
+        } else {
+            true
+        };
+
+
+        {
+            let command: Vec<&str> = input_line.split_whitespace().collect();
+
+            // Bultin check
+            match command[0] {
+                "cd" => {
+                    let result: Result<(), _> = if command.len() > 2 {
+                        eprintln!("cd: Expected 0 or 1 arguments, got {}", command.len() - 1);
+                        exit_status = 1;
+                        Ok(())
+                    } else if command.len() == 1 {
+                        env::set_current_dir(Path::new(&home_dir))
+                    } else {
+                        env::set_current_dir(Path::new(command[1]))
+                    };
+
+                    if let Err(e) = result {
+                        eprintln!("cd: {}", e);
+                        exit_status = 1;
+                    }
+
+                    continue;
+                },
+                _ => ()
+            }
+        }
+
+        // Not a builtin, proceed to split it up for fork+exec
+        input_line.push('\0'); // Needed because libc expects null termined arguments
 
         // split up to command args, etc
         unsafe {
@@ -87,21 +128,24 @@ fn main() {
             argv.push(std::ptr::null());
         }
 
-        // Path lookup and execution, plus error handling
         {
             let mut no_access = false;
             let mut success = false;
 
             let mut binary_name = unsafe { CStr::from_ptr(argv[0] as *const i8) };
 
-            if let Some(replacement) = aliases.get(binary_name) {
-                argv[0] = replacement.as_ptr();
-                for token in replacement.split("\0").skip(1).filter(|x| !x.is_empty()) {
-                    argv.insert(1, token.as_ptr())
+            // Alias handling
+            if do_aliases {
+                if let Some(replacement) = aliases.get(binary_name) {
+                    argv[0] = replacement.as_ptr();
+                    for token in replacement.split("\0").skip(1).filter(|x| !x.is_empty()) {
+                        argv.insert(1, token.as_ptr())
+                    }
+                    binary_name = unsafe { CStr::from_ptr(replacement.as_ptr() as *const i8) };
                 }
-                binary_name = unsafe { CStr::from_ptr(replacement.as_ptr() as *const i8) };
             }
 
+            // Path lookup + execution
             for path in path_list.iter() {
                 let mut temp_path = path.clone();
                 temp_path.push(binary_name.to_str().unwrap());
@@ -142,8 +186,5 @@ fn main() {
                 exit_status = 127;
             }
         }
-
-        input_line.clear();
-        argv.clear();
     }
 }
