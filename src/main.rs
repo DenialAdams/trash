@@ -184,6 +184,15 @@ fn main() {
                                 // oh no, we're still executing so something must have gone wrong
                                 libc::_exit(127);
                             }
+                        } else if pid == -1 {
+                            match unsafe { *libc::__errno_location() } {
+                                libc::EAGAIN => eprintln!("Can't allocate resources to fork"),
+                                libc::ENOMEM => eprintln!("Can't allocate memory to fork"),
+                                libc::ENOSYS => eprintln!("Fork unsupported on this platform"),
+                                _ => eprintln!("Unknown error occurred while trying to wait for child process")
+                            }
+
+                            std::process::exit(-1);
                         }
                     }
 
