@@ -2,10 +2,9 @@ use std::{self, env};
 use std::collections::HashMap;
 use std::convert::From;
 use std::path::PathBuf;
-use std::ffi::{self, CString, CStr};
+use std::ffi::{self, CString};
 use std::fs::File;
 use std::io::{self, BufReader, BufRead};
-use libc;
 
 pub enum Error {
     IoError(io::Error),
@@ -209,6 +208,13 @@ pub fn load_settings(home_dir: &str) -> Result<((Vec<PathBuf>, Vec<CString>, Has
         }
 
         exports.push(CString::new(path_string)?);
+    }
+
+    // export HOME
+    {
+        let home_string = format!("HOME={}", home_dir);
+
+        exports.push(CString::new(home_string)?);
     }
 
     Ok((path, exports, aliases))

@@ -17,7 +17,6 @@ fn main() {
     let mut handle = stdout.lock();
     let mut input_line = String::with_capacity(256);
     let mut argv = Vec::with_capacity(16);
-    let errno = unsafe { libc::__errno_location() };
     let mut exit_status = 0;
 
     // Mask out some signals
@@ -28,19 +27,41 @@ fn main() {
         libc::sigprocmask(libc::SIG_SETMASK, &signals, std::ptr::null_mut());
     } */
 
-    // Find the user's home directory
-    let home_dir = if let Ok(value) = env::var("HOME") {
-        value
-    } else {
-        // I'm not sure under what circumstances HOME would be unset, so this may be wholly unnecessary
-        // @Robustness getpwuid is not re-entrant, it's fine for us but just for kicks maybe we shoudld use getpwuid_r
-        let home_dir = unsafe {
-            let user_id = libc::getuid();
-            let pwid_ptr = libc::getpwuid(user_id);
-            CStr::from_ptr((*pwid_ptr).pw_dir).to_str().unwrap().to_string()
+    let user_id = unsafe { libc::getuid() };
+    let (home_dir, user_name) = unsafe {
+        let pwid_ptr = libc::getpwuid(user_id);
+
+        if pwid_ptr.is_null() {
+            match { *libc::__errno_location() } {
+                libc::EIO => eprintln!("I/O error occurred while trying to access user information"),
+                libc::EINTR => eprintln!("Signal caught while trying to access user information"), // @Robustness do we handle this?
+                libc::EMFILE => eprintln!("Have no more file descriptors available; can't access user information"),
+                _ => eprintln!("Unknown error occurred while trying to access user information")
+            }
+            std::process::exit(-1);
+        }
+
+        let home_dir = if let Ok(value) = env::var("HOME") {
+            value
+        } else {
+            let value = CStr::from_ptr((*pwid_ptr).pw_dir).to_str().unwrap_or_else(|_| {
+                eprintln!("$HOME not set and home directiory in pw_dir contained invalid utf-8");
+                std::process::exit(-1);
+            });
+            value.to_string()
         };
-        env::set_var("HOME", &home_dir);
-        home_dir
+
+        let user_name = if let Ok(value) = env::var("USER") {
+            value
+        } else {
+            let value = CStr::from_ptr((*pwid_ptr).pw_name).to_str().unwrap_or_else(|_| {
+                eprintln!("$USER not set and user information in pwid_ptr contained invalid utf-8");
+                std::process::exit(-1);
+            });
+            value.to_string()
+        };
+
+        (home_dir, user_name)
     };
 
     let (path_list, owned_exports, aliases) = match config::load_settings(&home_dir) {
@@ -60,7 +81,7 @@ fn main() {
         
         // IO: print out, get input in
         let result: Result<(), io::Error> = do catch {
-            prompt::write_prompt(&mut handle, &home_dir, exit_status)?;
+            prompt::write_prompt(&mut handle, &user_name, user_id, &home_dir, exit_status)?;
             handle.flush()?;
             io::stdin().read_line(&mut input_line)?;
             let _ = input_line.pop(); // Newline
@@ -151,7 +172,7 @@ fn main() {
                 temp_path.push(binary_name.to_str().unwrap());
                 {
                     let full_path = CString::new(temp_path.to_str().unwrap()).unwrap();
-                    unsafe { *errno = 0 };
+                    unsafe { *libc::__errno_location() = 0 };
                     // Fork + exec
                     {
                         let pid = unsafe { libc::vfork() };
@@ -165,21 +186,34 @@ fn main() {
                             }
                         }
                     }
+
                     // Wait for our child to finish
                     let mut wstatus: i32 = unsafe { std::mem::uninitialized() };
-                    unsafe { libc::wait(&mut wstatus as *mut i32) };
-                    if unsafe { *errno == 0 } {
+                    {
+                        let wait_ret_val = unsafe { libc::wait(&mut wstatus as *mut i32) };
+                        if wait_ret_val == -1 {
+                            match unsafe { *libc::__errno_location() } {
+                                libc::ECHILD => eprintln!("Somehow, no child process to wait for"),
+                                libc::EINTR => eprintln!("Signal caught while waiting for child process"), // @Robustness do we handle this?
+                                _ => eprintln!("Unknown error occurred while trying to wait for child process")
+                            }
+
+                            std::process::exit(-1);
+                        }
+                    }
+
+                    if unsafe { *libc::__errno_location() == 0 } {
                         success = true;
                         exit_status = unsafe { libc::WEXITSTATUS(wstatus) };
                         break;
-                    } else if unsafe { *errno } == libc::EACCES {
+                    } else if unsafe { *libc::__errno_location() } == libc::EACCES {
                         no_access = true;
                     }
                 }
             }
 
             if !success && no_access {
-                eprintln!("Found matching item for {:?} on path, but didn't have rights to execute it.", binary_name);
+                eprintln!("Found matching item for {:?} on path, but couldn't execute it", binary_name);
                 exit_status = 126;
             } else if !success {
                 eprintln!("Command not found {:?}.", binary_name);
