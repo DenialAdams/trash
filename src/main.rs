@@ -85,7 +85,6 @@ fn main() {
             handle.flush()?;
             io::stdin().read_line(&mut input_line)?;
             let _ = input_line.pop(); // Newline
-            input_line = input_line.trim().into(); // Spaces
             Ok(())
         };
 
@@ -94,139 +93,143 @@ fn main() {
             break;
         }
 
-        if input_line.is_empty() {
-            continue;
-        }
+        for statement in input_line.split(';') {
+            let mut statement = statement.trim().to_string();
 
-        let do_aliases = if input_line.starts_with("\\") {
-            input_line.remove(0);
-            false
-        } else {
-            true
-        };
-
-
-        {
-            let command: Vec<&str> = input_line.split_whitespace().collect();
-
-            // Bultin check
-            match command[0] {
-                "cd" => {
-                    let result: Result<(), _> = if command.len() > 2 {
-                        eprintln!("cd: Expected 0 or 1 arguments, got {}", command.len() - 1);
-                        exit_status = 1;
-                        Ok(())
-                    } else if command.len() == 1 {
-                        env::set_current_dir(Path::new(&home_dir))
-                    } else {
-                        env::set_current_dir(Path::new(command[1]))
-                    };
-
-                    if let Err(e) = result {
-                        eprintln!("cd: {}", e);
-                        exit_status = 1;
-                    }
-
-                    continue;
-                },
-                _ => ()
+            if statement.is_empty() {
+                continue;
             }
-        }
 
-        // Not a builtin, proceed to split it up for fork+exec
-        input_line.push('\0'); // Needed because libc expects null termined arguments
+            let do_aliases = if statement.starts_with('\\') {
+                statement.remove(0);
+                false
+            } else {
+                true
+            };
 
-        // split up to command args, etc
-        unsafe {
-            argv.push(input_line.as_ptr());
-            let input_bytes = input_line.as_bytes_mut();
-            for byte in input_bytes.iter_mut() {
-                if *byte == b' ' {
-                    *byte = 0;
-                    argv.push((byte as *const u8).offset(1));
-                }
-            }
-            argv.push(std::ptr::null());
-        }
 
-        {
-            let mut no_access = false;
-            let mut success = false;
+            {
+                let command: Vec<&str> = input_line.split_whitespace().collect();
 
-            let mut binary_name = unsafe { CStr::from_ptr(argv[0] as *const i8) };
+                // Bultin check
+                match command[0] {
+                    "cd" => {
+                        let result: Result<(), _> = if command.len() > 2 {
+                            eprintln!("cd: Expected 0 or 1 arguments, got {}", command.len() - 1);
+                            exit_status = 1;
+                            Ok(())
+                        } else if command.len() == 1 {
+                            env::set_current_dir(Path::new(&home_dir))
+                        } else {
+                            env::set_current_dir(Path::new(command[1]))
+                        };
 
-            // Alias handling
-            if do_aliases {
-                if let Some(replacement) = aliases.get(binary_name) {
-                    argv[0] = replacement.as_ptr();
-                    for token in replacement.split("\0").skip(1).filter(|x| !x.is_empty()) {
-                        argv.insert(1, token.as_ptr())
-                    }
-                    binary_name = unsafe { CStr::from_ptr(replacement.as_ptr() as *const i8) };
+                        if let Err(e) = result {
+                            eprintln!("cd: {}", e);
+                            exit_status = 1;
+                        }
+
+                        continue;
+                    },
+                    _ => ()
                 }
             }
 
-            // Path lookup + execution
-            for path in path_list.iter() {
-                let mut temp_path = path.clone();
-                temp_path.push(binary_name.to_str().unwrap());
-                {
-                    let full_path = CString::new(temp_path.to_str().unwrap()).unwrap();
-                    unsafe { *libc::__errno_location() = 0 };
-                    // Fork + exec
+            // Not a builtin, proceed to split it up for fork+exec
+            statement.push('\0'); // Needed because libc expects null termined arguments
+
+            // split up to command args, etc
+            unsafe {
+                argv.push(statement.as_ptr());
+                let statement_bytes = statement.as_bytes_mut();
+                for byte in statement_bytes.iter_mut() {
+                    if *byte == b' ' {
+                        *byte = 0;
+                        argv.push((byte as *const u8).offset(1));
+                    }
+                }
+                argv.push(std::ptr::null());
+            }
+
+            {
+                let mut no_access = false;
+                let mut success = false;
+
+                let mut binary_name = unsafe { CStr::from_ptr(argv[0] as *const i8) };
+
+                // Alias handling
+                if do_aliases {
+                    if let Some(replacement) = aliases.get(binary_name) {
+                        argv[0] = replacement.as_ptr();
+                        for token in replacement.split('\0').skip(1).filter(|x| !x.is_empty()) {
+                            argv.insert(1, token.as_ptr())
+                        }
+                        binary_name = unsafe { CStr::from_ptr(replacement.as_ptr() as *const i8) };
+                    }
+                }
+
+                // Path lookup + execution
+                for path in path_list.iter() {
+                    let mut temp_path = path.clone();
+                    temp_path.push(binary_name.to_str().unwrap());
                     {
-                        let pid = unsafe { libc::vfork() };
+                        let full_path = CString::new(temp_path.to_str().unwrap()).unwrap();
+                        unsafe { *libc::__errno_location() = 0 };
+                        // Fork + exec
+                        {
+                            let pid = unsafe { libc::vfork() };
 
-                        // child
-                        if pid == 0 {
-                            unsafe {
-                                libc::execve(full_path.as_ptr(), argv.as_ptr() as *const *const i8, exports.as_ptr());
-                                // oh no, we're still executing so something must have gone wrong
-                                libc::_exit(127);
-                            }
-                        } else if pid == -1 {
-                            match unsafe { *libc::__errno_location() } {
-                                libc::EAGAIN => eprintln!("Can't allocate resources to fork"),
-                                libc::ENOMEM => eprintln!("Can't allocate memory to fork"),
-                                libc::ENOSYS => eprintln!("Fork unsupported on this platform"),
-                                _ => eprintln!("Unknown error occurred while trying to wait for child process")
-                            }
+                            // child
+                            if pid == 0 {
+                                unsafe {
+                                    libc::execve(full_path.as_ptr(), argv.as_ptr() as *const *const i8, exports.as_ptr());
+                                    // oh no, we're still executing so something must have gone wrong
+                                    libc::_exit(127);
+                                }
+                            } else if pid == -1 {
+                                match unsafe { *libc::__errno_location() } {
+                                    libc::EAGAIN => eprintln!("Can't allocate resources to fork"),
+                                    libc::ENOMEM => eprintln!("Can't allocate memory to fork"),
+                                    libc::ENOSYS => eprintln!("Fork unsupported on this platform"),
+                                    _ => eprintln!("Unknown error occurred while trying to wait for child process")
+                                }
 
-                            std::process::exit(-1);
+                                std::process::exit(-1);
+                            }
+                        }
+
+                        // Wait for our child to finish
+                        let mut wstatus: i32 = unsafe { std::mem::uninitialized() };
+                        {
+                            let wait_ret_val = unsafe { libc::wait(&mut wstatus as *mut i32) };
+                            if wait_ret_val == -1 {
+                                match unsafe { *libc::__errno_location() } {
+                                    libc::ECHILD => eprintln!("Somehow, no child process to wait for"),
+                                    libc::EINTR => eprintln!("Signal caught while waiting for child process"), // @Robustness do we handle this?
+                                    _ => eprintln!("Unknown error occurred while trying to wait for child process")
+                                }
+
+                                std::process::exit(-1);
+                            }
+                        }
+
+                        if unsafe { *libc::__errno_location() == 0 } {
+                            success = true;
+                            exit_status = unsafe { libc::WEXITSTATUS(wstatus) };
+                            break;
+                        } else if unsafe { *libc::__errno_location() } == libc::EACCES {
+                            no_access = true;
                         }
                     }
-
-                    // Wait for our child to finish
-                    let mut wstatus: i32 = unsafe { std::mem::uninitialized() };
-                    {
-                        let wait_ret_val = unsafe { libc::wait(&mut wstatus as *mut i32) };
-                        if wait_ret_val == -1 {
-                            match unsafe { *libc::__errno_location() } {
-                                libc::ECHILD => eprintln!("Somehow, no child process to wait for"),
-                                libc::EINTR => eprintln!("Signal caught while waiting for child process"), // @Robustness do we handle this?
-                                _ => eprintln!("Unknown error occurred while trying to wait for child process")
-                            }
-
-                            std::process::exit(-1);
-                        }
-                    }
-
-                    if unsafe { *libc::__errno_location() == 0 } {
-                        success = true;
-                        exit_status = unsafe { libc::WEXITSTATUS(wstatus) };
-                        break;
-                    } else if unsafe { *libc::__errno_location() } == libc::EACCES {
-                        no_access = true;
-                    }
                 }
-            }
 
-            if !success && no_access {
-                eprintln!("Found matching item for {:?} on path, but couldn't execute it", binary_name);
-                exit_status = 126;
-            } else if !success {
-                eprintln!("Command not found {:?}.", binary_name);
-                exit_status = 127;
+                if !success && no_access {
+                    eprintln!("Found matching item for {:?} on path, but couldn't execute it", binary_name);
+                    exit_status = 126;
+                } else if !success {
+                    eprintln!("Command not found {:?}.", binary_name);
+                    exit_status = 127;
+                }
             }
         }
     }
