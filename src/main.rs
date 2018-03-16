@@ -109,7 +109,7 @@ fn main() {
 
 
             {
-                let command: Vec<&str> = input_line.split_whitespace().collect();
+                let command: Vec<&str> = statement.split_whitespace().collect();
 
                 // Bultin check
                 match command[0] {
