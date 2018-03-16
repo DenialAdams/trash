@@ -77,7 +77,6 @@ fn main() {
 
     loop {
         input_line.clear();
-        argv.clear();
         
         // IO: print out, get input in
         let result: Result<(), io::Error> = do catch {
@@ -94,6 +93,7 @@ fn main() {
         }
 
         for statement in input_line.split(';') {
+            argv.clear();
             let mut statement = statement.trim().to_string();
 
             if statement.is_empty() {
