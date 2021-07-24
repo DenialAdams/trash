@@ -1,7 +1,4 @@
-#![feature(catch_expr)]
-
-extern crate libc;
-extern crate termcolor;
+#![feature(try_blocks)]
 
 mod config;
 mod prompt;
@@ -9,6 +6,7 @@ mod prompt;
 use std::io::{self, Write};
 use std::ffi::{CString, CStr};
 use std::env;
+use std::mem::MaybeUninit;
 use termcolor::{ColorChoice, StandardStream};
 use std::path::Path;
 
@@ -73,18 +71,25 @@ fn main() {
     };
 
     let mut exports: Vec<*const i8> = owned_exports.iter().map(|c_string| c_string.as_ptr()).collect();
-    exports.push(std::ptr::null());
+    exports.push(std::ptr::null_mut());
+
+    let mut spawn_file_actions: MaybeUninit<libc::posix_spawn_file_actions_t> = MaybeUninit::uninit();
+    let mut spawn_attributes: MaybeUninit<libc::posix_spawnattr_t> = MaybeUninit::uninit();
+
+    unsafe {
+        libc::posix_spawn_file_actions_init(spawn_file_actions.as_mut_ptr());
+        libc::posix_spawnattr_init(spawn_attributes.as_mut_ptr());
+    }
 
     loop {
         input_line.clear();
-        
+
         // IO: print out, get input in
-        let result: Result<(), io::Error> = do catch {
+        let result: Result<(), io::Error> = try {
             prompt::write_prompt(&mut handle, &user_name, user_id, &home_dir, exit_status)?;
             handle.flush()?;
             io::stdin().read_line(&mut input_line)?;
             let _ = input_line.pop(); // Newline
-            Ok(())
         };
 
         if let Err(e) = result {
@@ -175,31 +180,34 @@ fn main() {
                     {
                         let full_path = CString::new(temp_path.to_str().unwrap()).unwrap();
                         unsafe { *libc::__errno_location() = 0 };
-                        // Fork + exec
+                        // Spawn
                         {
-                            let pid = unsafe { libc::vfork() };
+                            let mut pid: libc::pid_t = 0;
+                            let ret_val = unsafe { libc::posix_spawn(&mut pid as *mut libc::pid_t, full_path.as_ptr(), std::ptr::null(), std::ptr::null(), argv.as_ptr() as *const *mut i8, exports.as_ptr() as *const *mut i8) };
 
-                            // child
-                            if pid == 0 {
-                                unsafe {
-                                    libc::execve(full_path.as_ptr(), argv.as_ptr() as *const *const i8, exports.as_ptr());
-                                    // oh no, we're still executing so something must have gone wrong
-                                    libc::_exit(127);
+                            match ret_val {
+                                0 => (),
+                                libc::EAGAIN => {
+                                    eprintln!("Can't allocate resources to fork");
+                                    std::process::exit(-1);
+                                },
+                                libc::ENOMEM => {
+                                    eprintln!("Can't allocate memory to fork");
+                                    std::process::exit(-1);
+                                },
+                                libc::ENOSYS => {
+                                    eprintln!("posix_spawn unsupported on this platform");
+                                    std::process::exit(-1);
+                                },
+                                x => {
+                                    eprintln!("Unknown error occurred while trying to spawn child process: {}", x);
+                                    std::process::exit(-1);
                                 }
-                            } else if pid == -1 {
-                                match unsafe { *libc::__errno_location() } {
-                                    libc::EAGAIN => eprintln!("Can't allocate resources to fork"),
-                                    libc::ENOMEM => eprintln!("Can't allocate memory to fork"),
-                                    libc::ENOSYS => eprintln!("Fork unsupported on this platform"),
-                                    _ => eprintln!("Unknown error occurred while trying to wait for child process")
-                                }
-
-                                std::process::exit(-1);
                             }
                         }
 
                         // Wait for our child to finish
-                        let mut wstatus: i32 = unsafe { std::mem::uninitialized() };
+                        let mut wstatus: i32 = 0;
                         {
                             let wait_ret_val = unsafe { libc::wait(&mut wstatus as *mut i32) };
                             if wait_ret_val == -1 {
@@ -215,7 +223,7 @@ fn main() {
 
                         if unsafe { *libc::__errno_location() == 0 } {
                             success = true;
-                            exit_status = unsafe { libc::WEXITSTATUS(wstatus) };
+                            exit_status = libc::WEXITSTATUS(wstatus);
                             break;
                         } else if unsafe { *libc::__errno_location() } == libc::EACCES {
                             no_access = true;

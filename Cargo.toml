@@ -1,5 +1,6 @@
 [package]
 name = "trash"
+edition = "2018"
 version = "0.1.0"
 authors = ["Richard McCormack <brick@brick.codes>"]
 

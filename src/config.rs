@@ -58,7 +58,7 @@ enum ParserState {
 }
 
 /// Loads the .trashrc in the user's home directory
-pub fn load_settings(home_dir: &str) -> Result<((Vec<PathBuf>, Vec<CString>, HashMap<CString, String>)), Error> {
+pub fn load_settings(home_dir: &str) -> Result<(Vec<PathBuf>, Vec<CString>, HashMap<CString, String>), Error> {
     let mut exports: Vec<CString> = Vec::with_capacity(16);
     let mut path: Vec<PathBuf> = Vec::with_capacity(16);
     let mut aliases: HashMap<CString, String> = HashMap::with_capacity(16);
@@ -75,7 +75,7 @@ pub fn load_settings(home_dir: &str) -> Result<((Vec<PathBuf>, Vec<CString>, Has
         let mut visited_exports = false;
         let mut visited_aliases = false;
         let mut expected_open = false;
-        
+
         let mut line_number = 0;
         for line in f.lines() {
             line_number += 1;

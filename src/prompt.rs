@@ -23,7 +23,7 @@ pub fn write_prompt(buf: &mut termcolor::StandardStreamLock, username: &str, use
     buf.reset()?;
 
     // Hostname
-    let mut hostname_container: Box<[i8; 16]> = Box::new([0; 16]);
+    let mut hostname_container: [i8; 16] = [0; 16];
     let ret_val = unsafe { libc::gethostname(hostname_container.as_mut_ptr(), hostname_container.len() - 1) };
     let print_hostname = if ret_val == -1 {
         // match errno
@@ -51,7 +51,7 @@ pub fn write_prompt(buf: &mut termcolor::StandardStreamLock, username: &str, use
     if current_directory.starts_with(home_dir) {
         current_directory = current_directory.replacen(home_dir, "~", 1);
     }
-    
+
     buf.set_color(ColorSpec::new().set_bold(true))?;
     write!(buf, "{} ", current_directory)?;
     buf.reset()?;
